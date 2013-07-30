@@ -1,0 +1,73 @@
+wPoll for new messages
+GET /api/v1/messages/latest
+Arguments
+last
+(optional) Indicates the highest message ID that the client is not interested in. They are implicitly interested in all messages with ids higher than this. If the `last` argument is not present, the server assumes a value equal to the highest existing message ID.
+dont_block
+set to “true” if the client is requesting a nonblocking reply
+Return values
+messages
+an array (possibly zero-length if dont_block is set) of messages with IDs newer than `last_message`
+Example request
+curl -G https://api.humbughq.com/v1/messages/latest \
+ -u othello-bot@example.com:a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5 \
+ -d "last=102345"
+Example response
+{ "messages" : [ { "client" : "website",
+        "content" : "hi",
+        "content_type" : "text/x-markdown",
+        "display_recipient" : [ { "email" : "wdaher@example.com",
+              "full_name" : "Waseem Daher",
+              "short_name" : "wdaher"
+            },
+            { "email" : "othello-bot@example.com",
+              "full_name" : "Othello, Moor of Venice",
+              "short_name" : "othello-bot"
+            }
+          ],
+        "gravatar_hash" : "948fcdfa93dd8986106032f1bad7f2c8",
+        "id" : 400,
+        "recipient_id" : 101,
+        "sender_email" : "othello-bot@example.com",
+        "sender_full_name" : "Othello, Moor of Venice",
+        "sender_short_name" : "othello-bot",
+        "subject" : "",
+        "timestamp" : 1365532669,
+        "type" : "private"
+      } ],
+  "msg" : "",
+  "result" : "success",
+  "update_types" : [ "new_messages" ]
+}
+Send a message
+POST /api/v1/messages
+Arguments
+type
+One of {private, stream}
+content
+The content of the message
+to
+In the case of a stream message, a string identifying the stream. In the case of a private message, a JSON-encoded list containing the usernames of the recipients.
+subject
+The subject for the message (Only required if type is “stream”)
+Return values
+id
+The ID of the newly created message.
+Example request
+Stream message
+
+curl https://api.humbughq.com/v1/messages \
+    -u BOT_EMAIL_ADDRESS:BOT_API_KEY \
+    -d "type=stream" \
+    -d "to=Denmark" \
+    -d "subject=Castle" \
+    -d "content=Something is rotten in the state of Denmark."
+Private message
+
+curl https://api.humbughq.com/v1/messages \
+    -u BOT_EMAIL_ADDRESS:BOT_API_KEY \
+    -d "type=private" \
+    -d "to=wdaher@example.com" \
+    -d "content=I come not, friends, to steal away your hearts."
+Example response
+{"msg": "", "result": "success"}
