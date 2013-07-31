@@ -150,17 +150,8 @@
 ;; }
 
 
-(def ks
-    (let [rc  (slurp (str (System/getenv "HOME") "/.humbugrc"))
-          key (second (re-find #"key=(\S*)" rc))
-          email (second (re-find #"email=(\S*)" rc))]
-      (str email ":" key)
-      ))
 
-
-
-
-  (defn fetch-new-zulip-messages [last]
+  (defn fetch-new-zulip-messages [ks last]
     (do 
           (println "Fetching from " last)
           (let [params {:basic-auth ks :as :json}
@@ -187,9 +178,19 @@
 
 (defn -main []
 
+  (def auth
+    (let [rc   (slurp (str (System/getenv "HOME") "/.humbugrc"))
+          kvs  (mapcat (fn [[_ k v]] [k v])   (re-seq #"\b([a-z]+)\s*=\s*(\S+)\b" rc))]
+      (apply hash-map kvs)))
+  (def ks (str (auth "email") ":" (auth "key")))
+
   (def imapHostManager (com.icegreen.greenmail.imap.ImapHostManagerImpl.))
   (def userManager (com.icegreen.greenmail.user.UserManager. imapHostManager))
-  (def imap (store "imap" "localhost" 2143 "pnf" "bleh"))
+  (def imap (store "imap" 
+                   (auth "imaphost")
+                   (Integer/parseInt (auth "imapport"))
+                   (auth "imapuser")
+                   (auth "imappassword")))
 
   ;; Process send requests asynchronously
   (def send-channel (chan))
@@ -225,7 +226,7 @@
   (go (loop [last nil]
         (recur 
          (try
-           (let [ms (fetch-new-zulip-messages last)]  ;; this is actually going to block
+           (let [ms (fetch-new-zulip-messages ks last)]  ;; this is actually going to block
              (doseq [m ms] (insert-message imap m))
              (apply max (map :id ms))
              )
