@@ -13,22 +13,13 @@
            (org.apache.commons.mail.util MimeMessageParser)
            (com.sun.mail.smtp.SMTPTransport)))
 
-
-
-(defn store [protocol server port user pass]
-  (let [;sf (com.sun.mail.util.MailSSLSocketFactory.)
-        ;_  (.setTrustAllHosts sf true)
-        p (ju/as-properties [["mail.store.protocol" protocol]
-                             ;["mail.imaps.host" server]
-                             ;["mail.imaps.port" (str port)]
-                             ;["mail.imaps.ssl.socketFactory",sf]
-                             ;["mail.imap.starttls.enable" "true"]
-                             ;["mail.imaps.ssl.checkserveridentity" "false"]
-                             ;["mail.imaps.ssl.trust" "*"]
-]
-)]
-    (doto (.getStore (Session/getDefaultInstance p) protocol)
-          (.connect server port user pass))))
+(defn store-getter [protocol server port user pass]
+  "Returns a function that, when inovoked, ensures a connection and returns the store."
+  (let [p      (ju/as-properties [["mail.store.protocol" protocol]])
+        s       (.getStore (Session/getDefaultInstance p) protocol)]
+    (fn [] 
+      (when (not (.isConnected s)) (.connect s server port user pass))
+      s)))
 
 (defn folders 
   "Get list of folders for  a store"
@@ -51,9 +42,9 @@
 ;(.delete (.getFolder lh "clojure.lang.LazySeq@f75de046") true)
 
 
-(defn ensure-folder [s fd]
+(defn ensure-folder [sg fd]
   "Make sure folder fd exists in store s"
-  (let [f (.getFolder s fd)]
+  (let [f (.getFolder (sg) fd)]
     (if (.exists f) f
         (do 
           (println "Creating folder" f)
@@ -79,11 +70,11 @@
     mm
     ))
 
-(defn append-messages [s fd mms]
-  (.appendMessages (ensure-folder s fd) mms))
+(defn append-messages [sg fd mms]
+  (.appendMessages (ensure-folder sg fd) mms))
 
-(defn append-message [s fd mm]
-  (append-messages s fd (into-array (type mm) [mm])))
+(defn append-message [sg fd mm]
+  (append-messages sg fd (into-array (type mm) [mm])))
 
 (defn decode-to [to]
   (if-let [email  (re-find #"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}\b" to)]
@@ -164,7 +155,7 @@
     )
 
 
-  (defn insert-message [store m]
+  (defn insert-message [sg m]
     (let [private? (= (:type m) "private")
           dr       (:display_recipient m)
           folder   (str (if private? "ZULIP-Private" (str "ZULIP-" dr)))
@@ -174,69 +165,72 @@
                                         :from (:sender_email m) 
                                         :reply-to stream)]
       (println "Storing in" folder)
-      (append-message store folder mm)))
+      (append-message sg folder mm)))
 
-(defn -main []
+(defn -main [& args]
+  (let [args (apply hash-map args)
+        msgid (args "-old")]
 
-  (def auth
-    (let [rc   (slurp (str (System/getenv "HOME") "/.humbugrc"))
-          kvs  (mapcat (fn [[_ k v]] [k v])   (re-seq #"\b([a-z]+)\s*=\s*(\S+)\b" rc))]
-      (apply hash-map kvs)))
-  (def ks (str (auth "email") ":" (auth "key")))
+      (def auth
+        (let [rc   (slurp (str (System/getenv "HOME") "/.humbugrc"))
+              kvs  (mapcat (fn [[_ k v]] [k v])   (re-seq #"\b([a-z]+)\s*=\s*(\S+)\b" rc))]
+          (apply hash-map kvs)))
+    (def ks (str (auth "email") ":" (auth "key")))
 
-  (def imapHostManager (com.icegreen.greenmail.imap.ImapHostManagerImpl.))
-  (def userManager (com.icegreen.greenmail.user.UserManager. imapHostManager))
-  (def imap (store "imap" 
-                   (auth "imaphost")
-                   (Integer/parseInt (auth "imapport"))
-                   (auth "imapuser")
-                   (auth "imappassword")))
+    (def imapHostManager (com.icegreen.greenmail.imap.ImapHostManagerImpl.))
+    (def userManager (com.icegreen.greenmail.user.UserManager. imapHostManager))
+    (def imap (store-getter "imap" 
+                     (auth "imaphost")
+                     (Integer/parseInt (auth "imapport"))
+                     (auth "imapuser")
+                     (auth "imappassword")))
 
-  ;; Process send requests asynchronously
-  (def send-channel (chan))
-  (go (while true (let [state (<! send-channel)]
-                    (println state)
-                    (send-to-humbug ks state)
-                    )))
+    ;; Process send requests asynchronously
+    (def send-channel (chan))
+    (go (while true (let [state (<! send-channel)]
+                      (println state)
+                      (send-to-humbug ks state)
+                      )))
 
-  (defn send-to-humbug-async [channel state]
-    (try (let [mm       (.getMessage state)
-               m        (.getMessage mm)
-               p        (MimeMessageParser. m)
-               _        (.parse p)
-               subject  (.getSubject p)
-               to       (.toString (first (.getTo p)))
-               content (.getPlainContent p)]
-           (go (>! send-channel [subject to content]))
-           nil)
-         (catch Exception e ((let [em (.getMessage e)]
-                               (println em)
-                                          em)))))
+    (defn send-to-humbug-async [channel state]
+      (try (let [mm       (.getMessage state)
+                 m        (.getMessage mm)
+                 p        (MimeMessageParser. m)
+                 _        (.parse p)
+                 subject  (.getSubject p)
+                 to       (.toString (first (.getTo p)))
+                 content (.getPlainContent p)]
+             (go (>! send-channel [subject to content]))
+             nil)
+           (catch Exception e ((let [em (.getMessage e)]
+                                 (println em)
+                                 em)))))
 
-  (def smtpManager (proxy 
-                       [com.icegreen.greenmail.smtp.SmtpManager] 
-                       [imapHostManager userManager]
-                     (checkData [state] (send-to-humbug-async send-channel state))))
-  (def managers (proxy [com.icegreen.greenmail.Managers] []
-                  (getSmtpManager [] smtpManager)))
-  (def mailServer (com.icegreen.greenmail.util.ZGreenMail. ServerSetupTest/SMTP managers))
-  (.start mailServer)
-  (def user (.setUser mailServer "user@host.com" "user" "user"))
+    (def smtpManager (proxy 
+                         [com.icegreen.greenmail.smtp.SmtpManager] 
+                         [imapHostManager userManager]
+                       (checkData [state] (send-to-humbug-async send-channel state))))
+    (def managers (proxy [com.icegreen.greenmail.Managers] []
+                    (getSmtpManager [] smtpManager)))
+    (def mailServer (com.icegreen.greenmail.util.ZGreenMail. ServerSetupTest/SMTP managers))
+    (.start mailServer)
+    (def user (.setUser mailServer "user@host.com" "user" "user"))
 
-  (go (loop [last nil]
-        (recur 
-         (try
-           (let [ms (fetch-new-zulip-messages ks last)]  ;; this is actually going to block
-             (doseq [m ms] (insert-message imap m))
-             (apply max (map :id ms))
-             )
-           (catch Exception e (let [em (.getMessage e)]
-                              (println "Sleeping after exception: " em)
-                              (Thread/sleep 1000)
-                              nil))
-         ))))
+    (go (loop [last msgid]
+          (recur 
+           (try
+             (let [ms (fetch-new-zulip-messages ks last)]  ;; this is actually going to block
+               (doseq [m ms] (insert-message imap m))
+               (apply max (map :id ms))
+               )
+             (catch Exception e (let [em (.getMessage e)]
+                                  (println "Sleeping after exception: " e em)
+                                  (Thread/sleep 1000)
+                                  nil))
+             ))))
 
 
-  (println "Mail server started")
+    (println "Mail server started")
 
-)
+    
+    ))
