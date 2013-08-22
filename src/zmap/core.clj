@@ -54,7 +54,7 @@
 ; create possibly fake email address into InternetAddressArray
 (defn encode-from [from]
   (let [email  (re-find #"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}\b" from)
-        email  (or email (str from "@stream.com"))
+        email  (or email (str (clojure.string/replace from #"\s" "_") "@stream.com"))
         email  (InternetAddress. email)
         email  (into-array (type email) [email] )]
     email ))
